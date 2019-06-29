@@ -18,9 +18,39 @@ from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import MarkerArray
 from visualization_msgs.msg import Marker
 
+import math
 
 
-cap = cv2.VideoCapture(0)
+def isRotationMatrix(R) :
+    Rt = np.transpose(R)
+    shouldBeIdentity = np.dot(Rt, R)
+    I = np.identity(3, dtype = R.dtype)
+    n = np.linalg.norm(I - shouldBeIdentity)
+    return n < 1e-6
+
+
+def rotationMatrixToEulerAngles(R) :
+
+    assert(isRotationMatrix(R))
+
+    sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
+
+    singular = sy < 1e-6
+
+    if  not singular :
+        x = math.atan2(R[2,1] , R[2,2])
+        y = math.atan2(-R[2,0], sy)
+        z = math.atan2(R[1,0], R[0,0])
+    else :
+        x = math.atan2(-R[1,2], R[1,1])
+        y = math.atan2(-R[2,0], sy)
+        z = 0
+
+    return np.array([x, y, z])
+
+
+
+cap = cv2.VideoCapture(1)
 
 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
@@ -68,34 +98,52 @@ while 1:
     ret, frame = cap.read()
     # operations on the frame come here
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    aruco_dict = aruco.Dictionary_get(aruco.DICT_6X6_250)
+    aruco_dict = aruco.Dictionary_get(aruco.DICT_4X4_250)
     parameters = aruco.DetectorParameters_create()
     #lists of ids and the corners beloning to each id
     corners, ids, rejectedImgPoints = aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
 
+
     font = cv2.FONT_HERSHEY_SIMPLEX #font for displaying text (below)
     if np.all(ids != None):
-        rvec, tvec,_ = aruco.estimatePoseSingleMarkers(corners[0], 0.08, mtx, dist) #Estimate pose of each marker and return the values rvet and tvec---different from camera coefficients
-        #(rvec-tvec).any() # get rid of that nasty numpy value array error
-        print tvec[0][0][2]
+        for i in range(len(ids)):
+            if ids[i][0] == 1 or ids[i][0] == 2 or ids[i][0] == 3:
+                rvec, tvec,_ = aruco.estimatePoseSingleMarkers(corners[i], 0.08, mtx, dist)
+                dst, jacobian = cv2.Rodrigues(rvec)
+                array_angle = rotationMatrixToEulerAngles(dst)
+                array_angle_deg = array_angle*180/math.pi
 
-        pose_quat = tf.transformations.quaternion_from_euler(rvec[0][0][0],rvec[0][0][1],rvec[0][0][2])
+                if(array_angle_deg[2] < 0):
+                    array_angle_deg[2] = array_angle_deg[2] +360
+                # print array_angle_deg[2]
 
-        msg = Pose()
-        msg.position.x= tvec[0][0][0]
-        msg.position.y= tvec[0][0][1]
-        msg.position.z= tvec[0][0][2]
+                h = 0.1
+                x0 = tvec[0][0][0] + h * np.sin(array_angle[2]*math.pi/180)
+                y0 = tvec[0][0][1] + h * np.cos(array_angle[2]*math.pi/180)
 
-        msg.orientation.x=pose_quat[0]
-        msg.orientation.y=pose_quat[1]
-        msg.orientation.z=pose_quat[2]
-        msg.orientation.w=pose_quat[3]
+                if ids[i][0] == 1:
+                    theta = array_angle_deg[2]
+                if ids[i][0] == 2:
+                    theta = (array_angle_deg[2] + 240) % 360
+                if ids[i][0] == 3:
+                    theta = (array_angle_deg[2] + 120) % 360
+                print x0, y0, theta
 
-        pub_pose.publish(msg);
+                msg = Pose()
+                msg.position.x= tvec[0][0][0]
+                msg.position.y= tvec[0][0][1]
+                msg.position.z= tvec[0][0][2]
 
-        #!!!!!!!!!!!
-        aruco.drawAxis(frame, mtx, dist, rvec[0], tvec[0], 0.1) #Draw Axis
-        aruco.drawDetectedMarkers(frame, corners) #Draw A square around the markers
+                # msg.orientation.x=pose_quat[0]
+                # msg.orientation.y=pose_quat[1]
+                # msg.orientation.z=pose_quat[2]
+                # msg.orientation.w=pose_quat[3]
+
+                pub_pose.publish(msg);
+
+                #!!!!!!!!!!!
+                aruco.drawAxis(frame, mtx, dist, rvec[0], tvec[0], 0.1) #Draw Axis
+                aruco.drawDetectedMarkers(frame, corners) #Draw A square around the markers
         #!!!!!!!!!!!
 
 
